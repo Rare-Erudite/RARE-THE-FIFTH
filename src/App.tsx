@@ -66,6 +66,8 @@ import { safeFetch, safePost } from './api';
 import { ImageStudioWorkspaceView } from './ImageStudioWorkspaceView';
 import { DownloadAppModal } from './DownloadAppModal';
 import { UpdateModal, AppUpdate } from './UpdateModal';
+import { DeveloperAuthModal } from './DeveloperAuthModal';
+import { AuthModal, UserAccount } from './AuthModal';
 
 // Types
 export type AgentRole =
@@ -242,6 +244,17 @@ export default function App() {
   const [isDeveloperAuthed, setIsDeveloperAuthed] = useState(false);
   const [showDevModal, setShowDevModal] = useState(false);
   const [openDevSpaceDirectly, setOpenDevSpaceDirectly] = useState(false);
+
+  // User Account & Authentication Modal state (Sign In / Sign Up)
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
+    try {
+      const saved = localStorage.getItem('rare_user_account');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
 
   // Download & Dual-Channel OTA Update state
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
@@ -790,6 +803,26 @@ export default function App() {
           </div>
 
           <div className="flex items-center space-x-2 sm:space-x-2.5">
+            {/* Login / Sign Up Account Header Button */}
+            <button
+              onClick={() => setAuthModalOpen(true)}
+              className={`px-2.5 py-1 rounded-full text-xs flex items-center space-x-1.5 transition border ${
+                currentUser
+                  ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/25'
+                  : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:text-white'
+              }`}
+              title={currentUser ? `Logged in as ${currentUser.name}` : 'Login / Sign Up (Google, Outlook, Email, Phone)'}
+            >
+              <Users className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="font-semibold">
+                {currentUser ? (
+                  <span className="max-w-[80px] sm:max-w-[120px] truncate inline-block align-bottom">{currentUser.name}</span>
+                ) : (
+                  'Login / Sign Up'
+                )}
+              </span>
+            </button>
+
             {/* Install & Share App Header Button */}
             <button
               onClick={() => setDownloadModalOpen(true)}
@@ -948,24 +981,37 @@ export default function App() {
         </div>
       )}
 
-      {/* Developer Passkey Modal */}
-      {showDevModal && (
-        <DeveloperAuthModal
-          t={t}
-          isAuthed={isDeveloperAuthed}
-          onSuccess={() => {
+      {/* User Login / Sign Up Modal */}
+      <AuthModal
+        t={t}
+        isOpen={authModalOpen}
+        currentUser={currentUser}
+        onClose={() => setAuthModalOpen(false)}
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          localStorage.setItem('rare_user_account', JSON.stringify(user));
+          if (user.role === 'developer') {
             setIsDeveloperAuthed(true);
-            setShowDevModal(false);
-            setActiveTab('settings');
-            setOpenDevSpaceDirectly(true);
-          }}
-          onLogout={() => {
-            setIsDeveloperAuthed(false);
-            setShowDevModal(false);
-          }}
-          onClose={() => setShowDevModal(false)}
-        />
-      )}
+          }
+        }}
+        onLogout={() => {
+          setCurrentUser(null);
+          localStorage.removeItem('rare_user_account');
+        }}
+      />
+
+      {/* Developer Passkey Security & Access Modal */}
+      <DeveloperAuthModal
+        t={t}
+        isOpen={showDevModal}
+        onSuccess={() => {
+          setIsDeveloperAuthed(true);
+          setShowDevModal(false);
+          setActiveTab('settings');
+          setOpenDevSpaceDirectly(true);
+        }}
+        onClose={() => setShowDevModal(false)}
+      />
     </div>
   );
 }
@@ -4999,96 +5045,6 @@ function DeveloperSpaceView({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// -----------------------------------------------------------------------------
-// Developer Authorization Passkey Modal
-// -----------------------------------------------------------------------------
-function DeveloperAuthModal({
-  t,
-  isAuthed,
-  onSuccess,
-  onLogout,
-  onClose,
-}: {
-  t: ThemeConfig;
-  isAuthed: boolean;
-  onSuccess: () => void;
-  onLogout: () => void;
-  onClose: () => void;
-}) {
-  const [passkey, setPasskey] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-    try {
-      const res = await safePost<any>('/api/developer/auth', { passkey });
-      if (res?.success) {
-        onSuccess();
-      } else {
-        setError('Invalid developer passkey.');
-      }
-    } catch {
-      setError('Connection error.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className={`w-full max-w-md ${t.card} border ${t.cardBorder} rounded-2xl p-6 shadow-2xl space-y-4`}>
-        <div className="flex items-center space-x-3">
-          <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400">
-            <Lock className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold">Developer Space Access</h3>
-            <p className={`text-xs ${t.textDim}`}>Privileged self-development security barrier</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleAuth} className="space-y-4">
-          <p className={`text-xs ${t.textMuted}`}>
-            Please enter the developer passkey to access Developer Space and self-development capabilities.
-          </p>
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold">Master Passkey</label>
-            <input
-              type="password"
-              value={passkey}
-              onChange={(e) => setPasskey(e.target.value)}
-              placeholder="Enter passkey (rare-master-dev)..."
-              className={`w-full ${t.inputBg} border ${t.inputBorder} rounded-lg px-3 py-2 text-xs focus:outline-none`}
-            />
-          </div>
-
-          {error && <div className="text-xs text-rose-400 font-medium">{error}</div>}
-
-          <div className="flex justify-end space-x-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className={`px-4 py-2 rounded-lg ${t.cardSub} ${t.textMuted} border ${t.cardBorder} text-xs`}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !passkey.trim()}
-              className={`px-4 py-2 rounded-lg ${t.accentBg} ${t.accentBgHover} text-white text-xs font-semibold disabled:opacity-40`}
-            >
-              {loading ? 'Verifying...' : 'Unlock Developer Space'}
-            </button>
-          </div>
-        </form>
-      </div>
     </div>
   );
 }

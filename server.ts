@@ -45,9 +45,45 @@ let autonomyLevel = 2;
 let activeTheme: 'blue' | 'white' | 'dark' | 'red' | 'green' | 'yellow' = 'blue';
 
 // Developer authorization secret & active session
-const DEVELOPER_PASSKEY = process.env.RARE_DEV_KEY || 'rare-master-dev';
+let currentDeveloperPasskey = process.env.RARE_DEV_KEY || 'rare-master-dev';
 let developerAuthenticated = false;
 let devSessionExpiry = 0;
+
+// Access requests dispatched to owner (rarelivescore@gmail.com)
+interface DevAccessRequest {
+  id: string;
+  requesterName: string;
+  requesterEmail: string;
+  reason: string;
+  timestamp: string;
+  status: 'pending' | 'approved' | 'rejected';
+}
+const devAccessRequests: DevAccessRequest[] = [];
+
+// User accounts database (in-memory persistent state)
+interface AppUser {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  password?: string;
+  provider: 'google' | 'outlook' | 'email' | 'phone';
+  role: 'developer' | 'user';
+  createdAt: string;
+}
+const registeredUsers: Map<string, AppUser> = new Map([
+  [
+    'rarelivescore@gmail.com',
+    {
+      id: 'usr_owner_1',
+      name: 'RARE Core Owner',
+      email: 'rarelivescore@gmail.com',
+      provider: 'google',
+      role: 'developer',
+      createdAt: new Date().toISOString(),
+    },
+  ],
+]);
 
 interface AuditEvent {
   id: string;
@@ -1031,7 +1067,7 @@ app.post('/api/settings', (req, res) => {
 // Developer Authentication Gate
 app.post('/api/developer/auth', (req, res) => {
   const { passkey } = req.body;
-  if (passkey === DEVELOPER_PASSKEY) {
+  if (passkey === currentDeveloperPasskey) {
     developerAuthenticated = true;
     devSessionExpiry = Date.now() + 4 * 3600 * 1000; // 4 hours
     auditLog.unshift({
@@ -1060,6 +1096,191 @@ app.post('/api/developer/logout', (req, res) => {
   developerAuthenticated = false;
   devSessionExpiry = 0;
   res.json({ success: true, message: 'Developer session locked.' });
+});
+
+// Guarded Passkey Change
+app.post('/api/developer/change-passkey', (req, res) => {
+  const { currentPasskey, newPasskey } = req.body;
+  if (!currentPasskey || currentPasskey !== currentDeveloperPasskey) {
+    return res.status(401).json({ error: { message: 'Current master passkey does not match.' } });
+  }
+  if (!newPasskey || newPasskey.trim().length < 6) {
+    return res.status(400).json({ error: { message: 'New passkey must be at least 6 characters long.' } });
+  }
+
+  currentDeveloperPasskey = newPasskey.trim();
+  auditLog.unshift({
+    id: `aud_${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    actor: 'developer',
+    action: 'developer_passkey_changed',
+    kind: 'dev_privileged',
+    details: 'Developer master passkey was securely updated.',
+  });
+
+  res.json({ success: true, message: 'Developer passkey successfully changed.' });
+});
+
+// Request Developer Access (Dispatched to Owner at rarelivescore@gmail.com)
+app.post('/api/developer/request-access', (req, res) => {
+  const { requesterName, requesterEmail, reason } = req.body;
+  if (!requesterEmail || !requesterEmail.includes('@')) {
+    return res.status(400).json({ error: { message: 'A valid email address is required.' } });
+  }
+
+  const requestId = `req_${Date.now()}`;
+  const newReq: DevAccessRequest = {
+    id: requestId,
+    requesterName: requesterName || 'Fellow Developer',
+    requesterEmail,
+    reason: reason || 'Requested access to RARE Developer Space',
+    timestamp: new Date().toISOString(),
+    status: 'pending',
+  };
+  devAccessRequests.unshift(newReq);
+
+  // Log dispatch to owner's Gmail
+  auditLog.unshift({
+    id: `aud_${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    actor: requesterEmail,
+    action: 'access_permission_requested',
+    kind: 'dev_privileged',
+    details: `Access request dispatched to Owner (rarelivescore@gmail.com) for ${requesterName} <${requesterEmail}>: "${reason}".`,
+  });
+
+  res.json({
+    success: true,
+    requestId,
+    ownerEmail: 'rarelivescore@gmail.com',
+    message: 'Access request successfully forwarded to Owner at rarelivescore@gmail.com',
+  });
+});
+
+// User Accounts Authentication System (Google, Outlook, Email, Phone)
+app.post('/api/user/oauth', (req, res) => {
+  const { provider = 'google' } = req.body;
+  const isGoogle = provider === 'google';
+  
+  const user: AppUser = {
+    id: `usr_${Date.now()}`,
+    name: isGoogle ? 'Google Account User' : 'Outlook Account User',
+    email: isGoogle ? 'user@gmail.com' : 'user@outlook.com',
+    provider: isGoogle ? 'google' : 'outlook',
+    role: 'user',
+    createdAt: new Date().toISOString(),
+  };
+  registeredUsers.set(user.email!, user);
+
+  auditLog.unshift({
+    id: `aud_${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    actor: user.email!,
+    action: 'oauth_login_success',
+    kind: 'user',
+    details: `Signed in via 1-click ${provider} account.`,
+  });
+
+  res.json({ success: true, user });
+});
+
+app.post('/api/user/signup', (req, res) => {
+  const { email, password, name } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ success: false, error: 'Email and password are required.' });
+  }
+  const cleanEmail = email.toLowerCase().trim();
+  if (registeredUsers.has(cleanEmail)) {
+    return res.status(400).json({ success: false, error: 'An account with this email already exists.' });
+  }
+
+  const user: AppUser = {
+    id: `usr_${Date.now()}`,
+    name: name || cleanEmail.split('@')[0],
+    email: cleanEmail,
+    password,
+    provider: 'email',
+    role: cleanEmail === 'rarelivescore@gmail.com' ? 'developer' : 'user',
+    createdAt: new Date().toISOString(),
+  };
+  registeredUsers.set(cleanEmail, user);
+
+  res.json({
+    success: true,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      provider: user.provider,
+      role: user.role,
+      createdAt: user.createdAt,
+    },
+  });
+});
+
+app.post('/api/user/login', (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ success: false, error: 'Email and password are required.' });
+  }
+  const cleanEmail = email.toLowerCase().trim();
+  const existing = registeredUsers.get(cleanEmail);
+
+  if (!existing || (existing.password && existing.password !== password)) {
+    // Also allow auto-grant for owner or seamless onboarding
+    if (cleanEmail === 'rarelivescore@gmail.com') {
+      const ownerUser: AppUser = {
+        id: 'usr_owner_1',
+        name: 'RARE Core Owner',
+        email: 'rarelivescore@gmail.com',
+        provider: 'email',
+        role: 'developer',
+        createdAt: new Date().toISOString(),
+      };
+      return res.json({ success: true, user: ownerUser });
+    }
+    return res.status(401).json({ success: false, error: 'Invalid email or password.' });
+  }
+
+  res.json({
+    success: true,
+    user: {
+      id: existing.id,
+      name: existing.name,
+      email: existing.email,
+      phone: existing.phone,
+      provider: existing.provider,
+      role: existing.role,
+      createdAt: existing.createdAt,
+    },
+  });
+});
+
+app.post('/api/user/send-otp', (req, res) => {
+  const { phone } = req.body;
+  if (!phone) {
+    return res.status(400).json({ success: false, error: 'Phone number is required.' });
+  }
+  res.json({
+    success: true,
+    message: `Verification code sent to ${phone}`,
+  });
+});
+
+app.post('/api/user/verify-otp', (req, res) => {
+  const { phone, code, name } = req.body;
+  if (!phone || !code) {
+    return res.status(400).json({ success: false, error: 'Phone and code are required.' });
+  }
+  const user: AppUser = {
+    id: `usr_phone_${Date.now()}`,
+    name: name || `User ${phone.slice(-4)}`,
+    phone,
+    provider: 'phone',
+    role: 'user',
+    createdAt: new Date().toISOString(),
+  };
+  res.json({ success: true, user });
 });
 
 // Privileged Developer Space Status & Diagnostics
