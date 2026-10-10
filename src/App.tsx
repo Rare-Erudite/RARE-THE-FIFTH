@@ -64,6 +64,8 @@ import {
 import { themes, ThemeKey, ThemeConfig } from './theme';
 import { safeFetch, safePost } from './api';
 import { ImageStudioWorkspaceView } from './ImageStudioWorkspaceView';
+import { DownloadAppModal } from './DownloadAppModal';
+import { UpdateModal, AppUpdate } from './UpdateModal';
 
 // Types
 export type AgentRole =
@@ -241,6 +243,35 @@ export default function App() {
   const [showDevModal, setShowDevModal] = useState(false);
   const [openDevSpaceDirectly, setOpenDevSpaceDirectly] = useState(false);
 
+  // Download & Dual-Channel OTA Update state
+  const [downloadModalOpen, setDownloadModalOpen] = useState(false);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<AppUpdate | null>(null);
+  const [clientVersion, setClientVersion] = useState<string>(() => {
+    return localStorage.getItem('rare_client_version') || '1.0.0';
+  });
+
+  const checkForUpdates = async (forceOpenModal = false) => {
+    const channel = isDeveloperAuthed ? 'developer' : 'public';
+    const data = await safeFetch<any>(`/api/updates/check?clientVersion=${clientVersion}&channel=${channel}`);
+    if (data && data.hasUpdate && data.update) {
+      setAvailableUpdate(data.update);
+      const dismissed = sessionStorage.getItem('rare_dismissed_update');
+      if (forceOpenModal || dismissed !== data.update.id) {
+        setUpdateModalOpen(true);
+      }
+    } else {
+      setAvailableUpdate(null);
+    }
+    return data;
+  };
+
+  const handleApplyUpdate = (newVersion: string) => {
+    setClientVersion(newVersion);
+    localStorage.setItem('rare_client_version', newVersion);
+    setAvailableUpdate(null);
+  };
+
   const fetchHealthAndSettings = async () => {
     const [hData, sData] = await Promise.all([
       safeFetch<any>('/api/health'),
@@ -273,6 +304,7 @@ export default function App() {
   useEffect(() => {
     const init = async () => {
       fetchHealthAndSettings();
+      checkForUpdates(false);
       const existing = await loadConversations();
       // On app reload or fresh open, initialize with a new chat session immediately
       const newChat = await safePost<Conversation>('/api/conversations', {
@@ -717,11 +749,21 @@ export default function App() {
           </div>
 
           <div className="flex items-center justify-between text-xs pt-1 border-t border-white/5">
-            <div className="flex items-center space-x-2">
+            <button
+              onClick={() => checkForUpdates(true)}
+              className="flex items-center space-x-2 text-left hover:opacity-90 transition cursor-pointer"
+              title="Click to check for system updates"
+            >
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               <span className="font-medium text-[11px]">System Ready</span>
-            </div>
-            <span className={`text-[10px] font-mono ${t.textDim}`}>v0.45.0</span>
+            </button>
+            <button
+              onClick={() => setDownloadModalOpen(true)}
+              className={`text-[10px] font-mono ${t.textDim} hover:text-white transition hover:underline cursor-pointer`}
+              title="Click to download APK, Windows EXE, or PWA"
+            >
+              v{clientVersion}
+            </button>
           </div>
         </div>
       </aside>
@@ -747,7 +789,33 @@ export default function App() {
             <span className={`text-xs ${t.textMuted} hidden sm:inline`}>{assistantName} Intelligence Core</span>
           </div>
 
-          <div className="flex items-center space-x-2.5">
+          <div className="flex items-center space-x-2 sm:space-x-2.5">
+            {/* Install & Share App Header Button */}
+            <button
+              onClick={() => setDownloadModalOpen(true)}
+              className="px-2.5 py-1 rounded-full text-xs bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20 flex items-center space-x-1.5 transition shadow-xs"
+              title="Download APK, install to phone, or share via Xender"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline font-semibold">Install App</span>
+            </button>
+
+            {/* Dynamic Update Notification Pill */}
+            {availableUpdate && (
+              <button
+                onClick={() => setUpdateModalOpen(true)}
+                className={`px-2.5 py-1 rounded-full text-xs flex items-center space-x-1.5 transition animate-pulse font-semibold shadow-xs ${
+                  availableUpdate.channel === 'developer'
+                    ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30'
+                    : 'bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/30'
+                }`}
+                title={`New update v${availableUpdate.version} (${availableUpdate.channel}) is available! Click to view & apply.`}
+              >
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>v{availableUpdate.version} Update</span>
+              </button>
+            )}
+
             {/* Live Voice Call Header Button */}
             <button
               onClick={() => setLiveVoiceModalOpen(true)}
@@ -827,10 +895,36 @@ export default function App() {
               openDevSpaceDirectly={openDevSpaceDirectly}
               setOpenDevSpaceDirectly={setOpenDevSpaceDirectly}
               onDeveloperLogout={() => setIsDeveloperAuthed(false)}
+              clientVersion={clientVersion}
+              onCheckForUpdates={() => checkForUpdates(true)}
+              onOpenDownloadModal={() => setDownloadModalOpen(true)}
             />
           )}
         </div>
       </main>
+
+      {/* Download & Offline Install / Xender Share Modal */}
+      <DownloadAppModal
+        t={t}
+        isOpen={downloadModalOpen}
+        onClose={() => setDownloadModalOpen(false)}
+        assistantName={assistantName}
+      />
+
+      {/* Over-The-Air System Update Modal */}
+      <UpdateModal
+        t={t}
+        isOpen={updateModalOpen}
+        onClose={() => {
+          if (availableUpdate) {
+            sessionStorage.setItem('rare_dismissed_update', availableUpdate.id);
+          }
+          setUpdateModalOpen(false);
+        }}
+        update={availableUpdate}
+        onApplyUpdate={handleApplyUpdate}
+        isDeveloper={isDeveloperAuthed}
+      />
 
       {/* Live Voice Dialog Modal Overlay */}
       {liveVoiceModalOpen && (
@@ -3742,6 +3836,9 @@ function CleanSettingsWorkspaceView({
   openDevSpaceDirectly,
   setOpenDevSpaceDirectly,
   onDeveloperLogout,
+  clientVersion,
+  onCheckForUpdates,
+  onOpenDownloadModal,
 }: {
   t: ThemeConfig;
   assistantName: string;
@@ -3753,6 +3850,9 @@ function CleanSettingsWorkspaceView({
   openDevSpaceDirectly: boolean;
   setOpenDevSpaceDirectly: (b: boolean) => void;
   onDeveloperLogout: () => void;
+  clientVersion: string;
+  onCheckForUpdates: () => void;
+  onOpenDownloadModal: () => void;
 }) {
   const [nameInput, setNameInput] = useState(assistantName);
   const [saved, setSaved] = useState(false);
@@ -4021,6 +4121,81 @@ function CleanSettingsWorkspaceView({
         )}
       </div>
 
+      {/* 2. DUAL-CHANNEL SOFTWARE UPDATES & STANDALONE DISTRIBUTION */}
+      <div className={`${t.card} border ${t.cardBorder} rounded-2xl p-6 space-y-4 shadow-lg`}>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <div className={`w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center text-white shadow-md`}>
+              <RefreshCw className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-base font-bold text-white">System Updates & Standalone Distribution</h3>
+                <span className="text-[10px] font-mono font-bold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-2 py-0.5 rounded-full uppercase">
+                  Installed: v{clientVersion}
+                </span>
+              </div>
+              <p className={`text-xs ${t.textMuted}`}>
+                Independent personal app. You do not need to keep visiting AI Studio to use RARE.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onCheckForUpdates}
+              className={`px-3.5 py-2 rounded-xl ${t.accentBg} ${t.accentBgHover} text-white text-xs font-semibold flex items-center space-x-1.5 transition shadow-sm cursor-pointer`}
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Check for Updates</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenDownloadModal}
+              className={`px-3.5 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center space-x-1.5 transition cursor-pointer`}
+            >
+              <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Install & Share via Xender</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Dual Channel Information Banner */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+          <div className={`p-3.5 rounded-xl ${t.cardSub} border ${t.cardBorder} space-y-1.5`}>
+            <div className="flex items-center space-x-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+              <span className="font-bold text-xs text-white">Public Channel (All Users)</span>
+              <span className="text-[9px] font-mono bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded font-bold">
+                Active
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              General stable releases. When an update is deployed for everyone, your installed app brings up an automatic update prompt upon launch.
+            </p>
+          </div>
+
+          <div className={`p-3.5 rounded-xl ${t.cardSub} border ${t.cardBorder} space-y-1.5`}>
+            <div className="flex items-center space-x-2">
+              <Shield className="w-3 h-3 text-amber-400" />
+              <span className="font-bold text-xs text-white">Developer Channel (Restricted)</span>
+              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded font-bold uppercase ${
+                isDeveloperAuthed
+                  ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                  : 'bg-white/5 text-slate-500'
+              }`}>
+                {isDeveloperAuthed ? 'Unlocked' : 'Passkey Required'}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Preview builds generated during self-development. Only users authenticated with the developer passkey see and receive these updates.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <div className={`${t.card} border ${t.cardBorder} rounded-xl p-6 space-y-6`}>
         <h3 className="text-base font-bold">Preferences & Settings</h3>
 
@@ -4151,13 +4326,23 @@ function DeveloperSpaceView({
   onBack: () => void;
   onLogout: () => void;
 }) {
-  const [devTab, setDevTab] = useState<'intelligence' | 'self_dev' | 'agents' | 'config' | 'diagnostics' | 'checkpoints'>('intelligence');
+  const [devTab, setDevTab] = useState<'intelligence' | 'self_dev' | 'ota_updates' | 'agents' | 'config' | 'diagnostics' | 'checkpoints'>('intelligence');
   const [devStatus, setDevStatus] = useState<any>(null);
   const [selfDevPrompt, setSelfDevPrompt] = useState('');
   const [activeSelfDevRun, setActiveSelfDevRun] = useState<MultiAgentTeamRun | null>(null);
   const [submittingSelfDev, setSubmittingSelfDev] = useState(false);
   const [checkpointsList, setCheckpointsList] = useState<any[]>([]);
   const [trajectoriesList, setTrajectoriesList] = useState<any[]>([]);
+
+  // OTA Updates State
+  const [updatesList, setUpdatesList] = useState<any[]>([]);
+  const [newUpdateVersion, setNewUpdateVersion] = useState('');
+  const [newUpdateChannel, setNewUpdateChannel] = useState<'public' | 'developer'>('public');
+  const [newUpdateTitle, setNewUpdateTitle] = useState('');
+  const [newUpdateDescription, setNewUpdateDescription] = useState('');
+  const [newUpdateChangelog, setNewUpdateChangelog] = useState('');
+  const [publishingUpdate, setPublishingUpdate] = useState(false);
+  const [publishSuccess, setPublishSuccess] = useState<string | null>(null);
 
   const loadDevStatus = async () => {
     const data = await safeFetch<any>('/api/developer/status');
@@ -4166,6 +4351,8 @@ function DeveloperSpaceView({
     if (cpData) setCheckpointsList(cpData);
     const trajData = await safeFetch<any[]>('/api/intelligence/trajectories');
     if (trajData) setTrajectoriesList(trajData);
+    const updData = await safeFetch<any>('/api/updates/list?channel=developer');
+    if (updData?.updates) setUpdatesList(updData.updates);
   };
 
   useEffect(() => {
@@ -4193,6 +4380,52 @@ function DeveloperSpaceView({
   const handleRollback = async (checkpointId: string) => {
     await safePost('/api/developer/rollback', { checkpointId });
     loadDevStatus();
+  };
+
+  const handlePublishUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUpdateVersion.trim() || !newUpdateTitle.trim() || publishingUpdate) return;
+    setPublishingUpdate(true);
+    try {
+      const changelogLines = newUpdateChangelog
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const res = await safePost<any>('/api/updates/publish', {
+        version: newUpdateVersion.trim(),
+        channel: newUpdateChannel,
+        title: newUpdateTitle.trim(),
+        description: newUpdateDescription.trim() || 'Software build update released.',
+        changelog: changelogLines.length > 0 ? changelogLines : ['General performance improvements and fixes.'],
+      });
+      if (res?.success) {
+        setPublishSuccess(`Update v${res.update.version} published successfully to [${newUpdateChannel.toUpperCase()}] channel!`);
+        setTimeout(() => setPublishSuccess(null), 4000);
+        setNewUpdateVersion('');
+        setNewUpdateTitle('');
+        setNewUpdateDescription('');
+        setNewUpdateChangelog('');
+        loadDevStatus();
+      }
+    } finally {
+      setPublishingUpdate(false);
+    }
+  };
+
+  const handleRetractUpdate = async (id: string) => {
+    await safeFetch(`/api/updates/${id}`, { method: 'DELETE' });
+    loadDevStatus();
+  };
+
+  const handlePreloadFromTrajectory = (tr: any) => {
+    setDevTab('ota_updates');
+    setNewUpdateVersion(`1.1.${Math.floor(Date.now() / 1000) % 1000}`);
+    setNewUpdateChannel('developer');
+    setNewUpdateTitle(`Self-Development: ${tr.task}`);
+    setNewUpdateDescription(tr.plan || 'Autonomous self-development cycle verified and integrated.');
+    setNewUpdateChangelog(
+      `Action: ${tr.action}\nStatus: ${tr.status}${tr.repair_applied ? `\nRepair: ${tr.repair_applied}` : ''}`
+    );
   };
 
   return (
@@ -4232,6 +4465,7 @@ function DeveloperSpaceView({
         {[
           { id: 'intelligence', label: 'Intelligence Core & Trajectories', icon: BrainCircuit },
           { id: 'self_dev', label: 'Self-Development Engine', icon: Wrench },
+          { id: 'ota_updates', label: 'OTA Updates & Channels', icon: RefreshCw },
           { id: 'agents', label: 'Live Agent Coordination', icon: Users },
           { id: 'config', label: 'System Configuration', icon: Sliders },
           { id: 'diagnostics', label: 'Test Suite & Diagnostics', icon: Activity },
@@ -4329,8 +4563,18 @@ function DeveloperSpaceView({
                       <div className="text-emerald-300"><span className="text-emerald-400 font-bold">Repaired:</span> {tr.repair_applied}</div>
                     )}
                   </div>
-                  <div className={`text-[10px] ${t.textDim} font-mono pt-1`}>
-                    Trajectory ID: {tr.id} • Timestamp: {new Date(tr.timestamp).toLocaleString()}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-white/5">
+                    <div className={`text-[10px] ${t.textDim} font-mono`}>
+                      Trajectory ID: {tr.id} • Timestamp: {new Date(tr.timestamp).toLocaleString()}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handlePreloadFromTrajectory(tr)}
+                      className="px-2.5 py-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] font-semibold flex items-center space-x-1.5 transition self-start sm:self-auto cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3 text-sky-400" />
+                      <span>Publish as OTA Update</span>
+                    </button>
                   </div>
                 </div>
               ))}
@@ -4402,8 +4646,246 @@ function DeveloperSpaceView({
                   </div>
                 ))}
               </div>
+
+              {/* Publish Build as OTA Update Button */}
+              <div className="flex items-center justify-between pt-2 border-t border-white/10">
+                <span className="text-xs text-slate-300">Build finished. Ready to distribute?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDevTab('ota_updates');
+                    setNewUpdateVersion(`1.1.${Math.floor(Date.now() / 1000) % 1000}`);
+                    setNewUpdateChannel('developer');
+                    setNewUpdateTitle(activeSelfDevRun.title || 'Self-Development Release');
+                    setNewUpdateDescription(activeSelfDevRun.objective || 'Autonomous cycle completed and verified.');
+                    setNewUpdateChangelog(activeSelfDevRun.events.map((e) => `• [${e.agentName}] ${e.message}`).join('\n'));
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center space-x-1.5 transition shadow-md cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Push as Over-The-Air Update</span>
+                </button>
+              </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* OTA Updates & Dual-Channel Distribution Manager */}
+      {devTab === 'ota_updates' && (
+        <div className="space-y-5">
+          {/* Top Banner */}
+          <div className={`${t.card} border ${t.cardBorder} rounded-xl p-5 space-y-3`}>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-lg bg-sky-600 flex items-center justify-center text-white shadow-md">
+                  <RefreshCw className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Dual-Channel Over-The-Air (OTA) Release Manager</h3>
+                  <p className={`text-xs ${t.textMuted}`}>
+                    Push updates to clients on demand. Segregate public updates for all users from private developer builds.
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 font-bold self-start sm:self-auto">
+                {updatesList.length} Active Releases
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 text-xs">
+              <div className={`p-3 rounded-xl ${t.cardSub} border border-emerald-500/30 space-y-1`}>
+                <div className="font-bold text-emerald-300 flex items-center space-x-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <span>Public Channel (All Users)</span>
+                </div>
+                <p className="text-[11px] text-slate-300">
+                  When published here, every user who opens the RARE app on their phone or browser sees the update notification pop-up.
+                </p>
+              </div>
+
+              <div className={`p-3 rounded-xl ${t.cardSub} border border-amber-500/30 space-y-1`}>
+                <div className="font-bold text-amber-300 flex items-center space-x-1.5">
+                  <Shield className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Developer Channel (Restricted)</span>
+                </div>
+                <p className="text-[11px] text-slate-300">
+                  Visible strictly to users who unlock Developer Space. Ideal for experimental capabilities, self-development test builds, and internal verification.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Publish New Update Form */}
+          <div className={`${t.card} border ${t.cardBorder} rounded-xl p-5 space-y-4`}>
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-bold text-white flex items-center space-x-2">
+                <Sparkles className="w-4 h-4 text-sky-400" />
+                <span>Publish New Over-The-Air Update</span>
+              </h4>
+              {publishSuccess && (
+                <span className="text-xs text-emerald-400 font-semibold flex items-center space-x-1 animate-in fade-in">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>{publishSuccess}</span>
+                </span>
+              )}
+            </div>
+
+            <form onSubmit={handlePublishUpdate} className="space-y-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-slate-300">Target Channel</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewUpdateChannel('public')}
+                      className={`flex-1 py-2 px-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer ${
+                        newUpdateChannel === 'public'
+                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
+                          : `${t.cardSub} ${t.cardBorder} text-slate-400 hover:text-white`
+                      }`}
+                    >
+                      <span>🌐 Public (All)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewUpdateChannel('developer')}
+                      className={`flex-1 py-2 px-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer ${
+                        newUpdateChannel === 'developer'
+                          ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                          : `${t.cardSub} ${t.cardBorder} text-slate-400 hover:text-white`
+                      }`}
+                    >
+                      <span>🛡️ Devs Only</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1 sm:col-span-2">
+                  <label className="text-[11px] font-semibold text-slate-300">Version String</label>
+                  <input
+                    type="text"
+                    value={newUpdateVersion}
+                    onChange={(e) => setNewUpdateVersion(e.target.value)}
+                    placeholder="e.g. 1.1.0 or 1.1.0-dev"
+                    className={`w-full ${t.inputBg} border ${t.inputBorder} rounded-xl px-3 py-2 text-xs focus:outline-none font-mono`}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-300">Release Title</label>
+                <input
+                  type="text"
+                  value={newUpdateTitle}
+                  onChange={(e) => setNewUpdateTitle(e.target.value)}
+                  placeholder="e.g. Self-Development Core Upgrade & Enhanced Offline Performance"
+                  className={`w-full ${t.inputBg} border ${t.inputBorder} rounded-xl px-3 py-2 text-xs focus:outline-none`}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-300">Description Summary</label>
+                <input
+                  type="text"
+                  value={newUpdateDescription}
+                  onChange={(e) => setNewUpdateDescription(e.target.value)}
+                  placeholder="Brief overview of changes and improvements..."
+                  className={`w-full ${t.inputBg} border ${t.inputBorder} rounded-xl px-3 py-2 text-xs focus:outline-none`}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-300">Changelog Items (One per line)</label>
+                <textarea
+                  rows={3}
+                  value={newUpdateChangelog}
+                  onChange={(e) => setNewUpdateChangelog(e.target.value)}
+                  placeholder="Added self-development trajectory verification&#10;Enhanced offline memory caching&#10;Updated standalone package signature"
+                  className={`w-full ${t.inputBg} border ${t.inputBorder} rounded-xl px-3 py-2 text-xs focus:outline-none font-mono leading-relaxed`}
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <p className={`text-[11px] ${t.textDim}`}>
+                  Clients on the selected channel will see the update popup on app launch.
+                </p>
+                <button
+                  type="submit"
+                  disabled={publishingUpdate || !newUpdateVersion.trim() || !newUpdateTitle.trim()}
+                  className={`px-5 py-2.5 rounded-xl ${
+                    newUpdateChannel === 'developer'
+                      ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold'
+                      : `${t.accentBg} ${t.accentBgHover} text-white font-bold`
+                  } text-xs flex items-center space-x-2 shadow-lg transition active:scale-[0.98] disabled:opacity-40 cursor-pointer`}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${publishingUpdate ? 'animate-spin' : ''}`} />
+                  <span>{publishingUpdate ? 'Publishing...' : `Publish to ${newUpdateChannel === 'developer' ? 'Developer' : 'Public'} Channel`}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Deployed Releases List */}
+          <div className={`${t.card} border ${t.cardBorder} rounded-xl p-5 space-y-3`}>
+            <h4 className="text-sm font-bold text-white flex items-center space-x-2">
+              <Layers className="w-4 h-4 text-indigo-400" />
+              <span>Published Updates Registry</span>
+            </h4>
+
+            <div className="space-y-3">
+              {updatesList.map((upd) => (
+                <div
+                  key={upd.id}
+                  className={`p-4 rounded-xl ${t.cardSub} border ${
+                    upd.channel === 'developer' ? 'border-amber-500/30' : 'border-emerald-500/30'
+                  } space-y-2 text-xs`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                    <div className="flex items-center space-x-2">
+                      <span className="font-bold text-white text-sm">v{upd.version}</span>
+                      <span className="text-slate-300 font-medium">— {upd.title}</span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <span
+                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded uppercase border ${
+                          upd.channel === 'developer'
+                            ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                            : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                        }`}
+                      >
+                        {upd.channel === 'developer' ? '🛡️ Developers Only' : '🌐 Public (All Users)'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRetractUpdate(upd.id)}
+                        className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                        title="Retract / Delete update"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className={`text-[11px] ${t.textMuted}`}>{upd.description}</p>
+
+                  <div className="space-y-1 pt-1 font-mono text-[10px] text-slate-300">
+                    {upd.changelog.map((c: string, idx: number) => (
+                      <div key={idx} className="flex items-center space-x-1.5">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                        <span>{c}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className={`text-[10px] ${t.textDim} font-mono pt-1 flex items-center justify-between`}>
+                    <span>Published: {new Date(upd.releaseDate).toLocaleString()} by {upd.publishedBy}</span>
+                    <span>Target: {upd.packageUrl || 'OTA Delta'}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

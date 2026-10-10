@@ -11,7 +11,10 @@ import {
   Sparkles,
   HelpCircle,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Share2,
+  RefreshCw,
+  Layers
 } from 'lucide-react';
 import { ThemeConfig } from './theme';
 import { usePWAInstall } from './usePWAInstall';
@@ -31,6 +34,7 @@ export const DownloadAppModal: React.FC<DownloadAppModalProps> = ({
 }) => {
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
   const [showAndroidGuide, setShowAndroidGuide] = useState(false);
+  const [showXenderGuide, setShowXenderGuide] = useState(false);
   const [pwaInstallSuccess, setPwaInstallSuccess] = useState(false);
 
   if (!isOpen) return null;
@@ -120,24 +124,75 @@ export const DownloadAppModal: React.FC<DownloadAppModalProps> = ({
                 <span>Install Guide</span>
                 {showAndroidGuide ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
               </button>
+
+              <button
+                type="button"
+                onClick={() => setShowXenderGuide(!showXenderGuide)}
+                className="px-3 py-2 rounded-xl border border-indigo-500/40 bg-indigo-950/30 text-indigo-300 hover:bg-indigo-500/20 flex items-center justify-center space-x-1.5 transition font-medium"
+              >
+                <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Share via Xender</span>
+                {showXenderGuide ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
             </div>
 
-            {/* Android Install Instructions Dropdown */}
+            {/* Android Direct Install Instructions Dropdown */}
             {showAndroidGuide && (
-              <div className="p-3 rounded-lg bg-black/40 border border-white/5 space-y-1.5 text-[11px] text-slate-300 animate-in fade-in duration-150">
-                <div className="font-semibold text-white flex items-center space-x-1">
+              <div className="p-3.5 rounded-lg bg-black/50 border border-emerald-500/20 space-y-1.5 text-[11px] text-slate-300 animate-in fade-in duration-150">
+                <div className="font-semibold text-white flex items-center space-x-1.5">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>How to install on Android phone:</span>
+                  <span>How to install directly on your Android phone:</span>
                 </div>
                 <ol className="list-decimal list-inside space-y-1 pl-1 text-slate-300">
-                  <li>Click <strong>Download Android APK</strong> above to save the file.</li>
-                  <li>Open your phone's <strong>Downloads</strong> folder or tap the download notification.</li>
-                  <li>Tap <span className="font-mono text-emerald-300">RARE-v1.0.0-release.apk</span>.</li>
-                  <li>If prompted, toggle <strong>"Allow from this source"</strong> in settings.</li>
-                  <li>Tap <strong>Install</strong> to add RARE to your app drawer.</li>
+                  <li>Click <strong>Download Android APK</strong> above to save <span className="font-mono text-emerald-300">RARE-v1.0.0-release.apk</span> into your phone's storage.</li>
+                  <li>Open your phone's <strong>Downloads</strong> folder or tap the download complete notification.</li>
+                  <li>Tap the APK file. If Android asks, enable <strong>"Allow from this source"</strong>.</li>
+                  <li>Tap <strong>Install</strong>. RARE will appear directly on your home screen and app drawer!</li>
+                  <li>Open it anytime without ever having to visit Chrome or AI Studio again.</li>
                 </ol>
               </div>
             )}
+
+            {/* Xender & Offline Sharing Instructions Dropdown */}
+            {showXenderGuide && (
+              <div className="p-3.5 rounded-lg bg-indigo-950/40 border border-indigo-500/30 space-y-2 text-[11px] text-slate-300 animate-in fade-in duration-150">
+                <div className="font-semibold text-white flex items-center space-x-1.5">
+                  <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="text-indigo-200">How to share RARE with anyone using Xender (Zero Data):</span>
+                </div>
+                <ol className="list-decimal list-inside space-y-1.5 pl-1 text-slate-300">
+                  <li>First, tap <strong>Download Android APK</strong> above to save the file to your phone's Downloads.</li>
+                  <li>Open the <strong>Xender</strong> app on your Android phone.</li>
+                  <li>In Xender, tap the <strong>Files</strong> tab (or <strong>Apps</strong> tab) and open your <strong>Downloads</strong> folder.</li>
+                  <li>Select <strong className="font-mono text-emerald-300">RARE-v1.0.0-release.apk</strong> and tap <strong>Send</strong>.</li>
+                  <li>Have your friend open Xender on their phone, tap <strong>Receive</strong>, and scan your QR code.</li>
+                  <li>Once transfer finishes in seconds, they tap <strong>Install</strong> on their phone!</li>
+                  <li>They now have the standalone RARE app on their device with zero internet required for transfer!</li>
+                </ol>
+                <div className="p-2 rounded bg-black/40 border border-white/5 text-[10px] text-indigo-300">
+                  💡 <em>Tip: You can also share the downloaded APK file via Bluetooth, Nearby Share, or WhatsApp document!</em>
+                </div>
+              </div>
+            )}
+
+            {/* Dual-Channel Automatic Update System Explainer */}
+            <div className="p-3 rounded-lg bg-black/30 border border-white/10 space-y-1 text-[11px] text-slate-300">
+              <div className="flex items-center space-x-1.5 text-white font-semibold">
+                <RefreshCw className="w-3.5 h-3.5 text-sky-400" />
+                <span>Automatic Dual-Channel OTA Updates:</span>
+              </div>
+              <p className="text-[10px] text-slate-400">
+                Whenever you or the developer builds an update, the app automatically detects it on launch and brings up an update notification!
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1 text-[10px]">
+                <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                  🌐 Public Channel: All users see new stable releases
+                </span>
+                <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono">
+                  🛡️ Developer Channel: Visible strictly to authorized developers
+                </span>
+              </div>
+            </div>
           </div>
 
           {/* SECONDARY OPTION: In-App PWA / WebAPK Installation */}

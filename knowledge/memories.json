@@ -156,5 +156,30 @@
     "importance": 5,
     "source": "user_stated",
     "verifiedByUser": true
+  },
+  {
+    "id": "mem_1791607975062_zlsst",
+    "timestamp": "2026-10-10T04:52:55.062Z",
+    "kind": "fact",
+    "text": "Test tool memory statement",
+    "tags": [
+      "test_tool"
+    ],
+    "importance": 3,
+    "source": "user_stated",
+    "verifiedByUser": true
+  },
+  {
+    "id": "mem_1791607976287_98g3t",
+    "timestamp": "2026-10-10T04:52:56.287Z",
+    "kind": "fact",
+    "text": "eval_fact_1791607976287: Deterministic test token: eishib",
+    "tags": [
+      "eval_suite",
+      "test_token"
+    ],
+    "importance": 5,
+    "source": "user_stated",
+    "verifiedByUser": true
   }
 ]

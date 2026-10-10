@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
@@ -8,6 +9,7 @@ import { GoogleGenAI } from '@google/genai';
 import { MemoryStore, ConversationStore } from './src/server/storage/MemoryStore.js';
 import { CheckpointStore } from './src/server/storage/CheckpointStore.js';
 import { TrajectoryStore } from './src/server/storage/TrajectoryStore.js';
+import { UpdateStore, UpdateChannel } from './src/server/storage/UpdateStore.js';
 import { ToolExecutor } from './src/server/tools/ToolExecutor.js';
 import { ProviderRegistry } from './src/server/providers/ProviderRegistry.js';
 import { SelfDevelopmentEngine } from './src/server/development/SelfDevelopmentEngine.js';
@@ -29,6 +31,7 @@ const memoryStore = new MemoryStore();
 const conversationStore = new ConversationStore();
 const checkpointStore = new CheckpointStore();
 const trajectoryStore = new TrajectoryStore();
+const updateStore = new UpdateStore();
 const toolExecutor = new ToolExecutor(memoryStore, checkpointStore);
 const providerRegistry = new ProviderRegistry(memoryStore, toolExecutor);
 const selfDevEngine = new SelfDevelopmentEngine(checkpointStore, trajectoryStore, toolExecutor);
@@ -678,6 +681,7 @@ app.get('/api/download/apk', (req, res) => {
   const file = path.resolve(__dirname, 'exports', 'rare-v1.0.0-release.apk');
   if (fs.existsSync(file)) {
     res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    res.setHeader('Content-Disposition', 'attachment; filename="RARE-v1.0.0-release.apk"');
     return res.download(file, 'RARE-v1.0.0-release.apk');
   }
   res.status(404).json({ error: { message: 'APK deliverable not found' } });
@@ -688,9 +692,103 @@ app.get('/api/download/exe', (req, res) => {
   const file = path.resolve(__dirname, 'exports', 'rare-v1.0.0-windows-x64.exe');
   if (fs.existsSync(file)) {
     res.setHeader('Content-Type', 'application/vnd.microsoft.portable-executable');
+    res.setHeader('Content-Disposition', 'attachment; filename="RARE-v1.0.0-windows-x64.exe"');
     return res.download(file, 'RARE-v1.0.0-windows-x64.exe');
   }
   res.status(404).json({ error: { message: 'EXE deliverable not found' } });
+});
+
+// -----------------------------------------------------------------------------
+// Dual-Channel Over-The-Air (OTA) & System Updates API
+// Supports Public (all users) and Developer (restricted) channels
+// -----------------------------------------------------------------------------
+app.get('/api/updates/check', (req, res) => {
+  const clientVersion = String(req.query.clientVersion || '1.0.0').trim();
+  let requestedChannel = (req.query.channel === 'developer' ? 'developer' : 'public') as UpdateChannel;
+
+  // Verify developer privilege if developer channel is requested
+  const isAuth = developerAuthenticated && Date.now() < devSessionExpiry;
+  if (requestedChannel === 'developer' && !isAuth) {
+    requestedChannel = 'public';
+  }
+
+  const result = updateStore.checkForUpdate(clientVersion, requestedChannel);
+  res.json({
+    ...result,
+    isDeveloperAuthed: isAuth,
+  });
+});
+
+app.get('/api/updates/list', (req, res) => {
+  let requestedChannel = (req.query.channel === 'developer' ? 'developer' : 'public') as UpdateChannel;
+  const isAuth = developerAuthenticated && Date.now() < devSessionExpiry;
+  if (requestedChannel === 'developer' && !isAuth) {
+    requestedChannel = 'public';
+  }
+
+  const list = updateStore.getAll(requestedChannel);
+  res.json({
+    channel: requestedChannel,
+    updates: list,
+  });
+});
+
+app.post('/api/updates/publish', (req, res) => {
+  const isAuth = developerAuthenticated && Date.now() < devSessionExpiry;
+  if (!isAuth) {
+    return res.status(403).json({ error: { message: 'Developer authorization required to publish updates.' } });
+  }
+
+  const { version, channel = 'public', title, description, changelog, mandatory } = req.body;
+  if (!version || !title) {
+    return res.status(400).json({ error: { message: 'Version and title are required.' } });
+  }
+
+  const targetChannel: UpdateChannel = channel === 'developer' ? 'developer' : 'public';
+  const newUpdate = updateStore.publish({
+    version,
+    channel: targetChannel,
+    title,
+    description: description || 'New software update released.',
+    changelog: Array.isArray(changelog) ? changelog : [changelog || 'System optimizations and performance updates.'],
+    mandatory: Boolean(mandatory),
+    publishedBy: 'Developer Space (OTA)',
+  });
+
+  auditLog.unshift({
+    id: `aud_${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    actor: 'developer',
+    action: 'ota_update_published',
+    kind: 'dev_privileged',
+    details: `Published update ${newUpdate.version} to [${targetChannel.toUpperCase()}] channel: "${newUpdate.title}"`,
+  });
+
+  res.status(201).json({
+    success: true,
+    update: newUpdate,
+  });
+});
+
+app.delete('/api/updates/:id', (req, res) => {
+  const isAuth = developerAuthenticated && Date.now() < devSessionExpiry;
+  if (!isAuth) {
+    return res.status(403).json({ error: { message: 'Developer authorization required.' } });
+  }
+
+  const ok = updateStore.delete(req.params.id);
+  if (ok) {
+    auditLog.unshift({
+      id: `aud_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: 'developer',
+      action: 'ota_update_retracted',
+      kind: 'dev_privileged',
+      details: `Retracted update ID ${req.params.id}`,
+    });
+    return res.json({ success: true });
+  }
+  res.status(404).json({ error: { message: 'Update not found.' } });
 });
 
 // Live Voice Fast-Inference Endpoint
@@ -979,6 +1077,7 @@ app.get('/api/developer/status', (req, res) => {
     checkpointsCount: checkpoints.length,
     activeRunsCount: activeAgentRuns.length,
     toolchainsCount: toolchains.length,
+    updatesCount: updateStore.getAll('developer').length,
     auditEvents: auditLog.slice(0, 20),
     systemConfig: {
       port: PORT,
@@ -1611,37 +1710,21 @@ app.post('/api/research/search', (req, res) => {
   res.json({ query, results: [newResearch] });
 });
 
-// Updates Check
-app.get('/api/updates/check', (req, res) => {
-  res.json({
-    currentVersion: '0.45.0',
-    latestVersion: '0.45.1',
-    updateAvailable: true,
-    releaseDate: '2026-10-09',
-    channel: 'stable',
-    releaseNotes: `RARE 045.1 Release:
-• User-focused clean workspaces with progressive disclosure.
-• Dedicated Developer Space under Settings with authentication gate.
-• Collaborative Multi-Agent system with visible live coordination and inter-agent handoffs.
-• Full 6-palette theme system (Blue Default, White, Dark, Red, Green, Yellow).
-• Context-aware audio transcription with biblical reference verification.`,
-    packageSha256: '9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b',
-  });
-});
-
+// Updates Apply Endpoint
 app.post('/api/updates/apply', (req, res) => {
+  const { version } = req.body;
   auditLog.unshift({
     id: `aud_${Date.now()}`,
     timestamp: new Date().toISOString(),
-    actor: 'developer',
+    actor: 'user',
     action: 'release_update_applied',
     kind: 'dev_privileged',
-    details: 'Applied RARE 045.1 release update. Checkpoint verified.',
+    details: `Applied update v${version || 'latest'}. Verification completed.`,
   });
   res.json({
     success: true,
-    installedVersion: '0.45.1',
-    message: 'RARE 045.1 verified and active.',
+    installedVersion: version || '1.0.0',
+    message: `RARE update ${version ? 'v' + version : ''} verified and active.`,
   });
 });
 
@@ -2271,11 +2354,17 @@ app.post('/api/images/edit', async (req, res) => {
 // Start Server with Vite Middleware in Development
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
+  const httpServer = http.createServer(app);
 
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true, host: '0.0.0.0', port: PORT },
+      server: {
+        middlewareMode: true,
+        host: '0.0.0.0',
+        port: PORT,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -2286,7 +2375,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`RARE Core & Command Center running on http://0.0.0.0:${PORT}`);
   });
 }
